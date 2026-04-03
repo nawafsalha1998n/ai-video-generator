@@ -38,62 +38,61 @@ export function useLocalVideos() {
     }
   }, []);
 
-  // Save videos to localStorage whenever they change
-  useEffect(() => {
-    if (!isLoading) {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(videos));
-      } catch (error) {
-        console.error("Failed to save videos to localStorage:", error);
-      }
+  const saveVideosToStorage = (videosToSave: LocalVideo[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(videosToSave));
+    } catch (error) {
+      console.error("Failed to save videos to localStorage:", error);
     }
-  }, [videos, isLoading]);
+  };
 
   const addVideo = useCallback((video: Omit<LocalVideo, "id" | "createdAt">) => {
-    setVideos((prev) => {
-      // Check if we've reached the max videos limit
-      if (prev.length >= MAX_VIDEOS) {
-        // Remove oldest pending video or oldest video overall
-        const oldestPendingIndex = prev.findIndex((v) => v.status === "pending");
-        const indexToRemove = oldestPendingIndex !== -1 ? oldestPendingIndex : 0;
-        const newVideos = [...prev];
-        newVideos.splice(indexToRemove, 1);
-        return [
-          ...newVideos,
-          {
-            ...video,
-            id: `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            createdAt: Date.now(),
-          },
-        ];
-      }
+    const newVideo = {
+      ...video,
+      id: `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: Date.now(),
+    };
 
-      return [
-        ...prev,
-        {
-          ...video,
-          id: `video_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          createdAt: Date.now(),
-        },
-      ];
+    setVideos((prev) => {
+      let updatedVideos = [...prev];
+      if (updatedVideos.length >= MAX_VIDEOS) {
+        const oldestPendingIndex = updatedVideos.findIndex((v) => v.status === "pending");
+        const indexToRemove = oldestPendingIndex !== -1 ? oldestPendingIndex : 0;
+        updatedVideos.splice(indexToRemove, 1);
+      }
+      const finalVideos = [...updatedVideos, newVideo];
+      saveVideosToStorage(finalVideos); // Save synchronously
+      return finalVideos;
     });
   }, []);
 
   const updateVideo = useCallback((requestId: string, updates: Partial<LocalVideo>) => {
-    setVideos((prev) =>
-      prev.map((v) => (v.requestId === requestId ? { ...v, ...updates } : v))
-    );
+    setVideos((prev) => {
+      const updatedVideos = prev.map((v) => (v.requestId === requestId ? { ...v, ...updates } : v));
+      saveVideosToStorage(updatedVideos); // Save synchronously
+      return updatedVideos;
+    });
   }, []);
 
   const deleteVideo = useCallback((id: string) => {
-    setVideos((prev) => prev.filter((v) => v.id !== id));
+    setVideos((prev) => {
+      const updatedVideos = prev.filter((v) => v.id !== id);
+      saveVideosToStorage(updatedVideos); // Save synchronously
+      return updatedVideos;
+    });
   }, []);
 
   const getVideo = useCallback(
     (requestId: string) => {
-      return videos.find((v) => v.requestId === requestId);
+      // Read directly from localStorage for immediate consistency
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as LocalVideo[];
+        return parsed.find((v) => v.requestId === requestId);
+      }
+      return undefined;
     },
-    [videos]
+    []
   );
 
   return {
