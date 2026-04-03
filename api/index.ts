@@ -1,9 +1,9 @@
 import "dotenv/config";
 import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "../server/_core/oauth.ts";
-import { appRouter } from "../server/routers.ts";
-import { createContext } from "../server/_core/context.ts";
+import { registerOAuthRoutes } from "../server/_core/oauth";
+import { appRouter } from "../server/routers";
+import { createContext } from "../server/_core/context";
 
 const app = express();
 
@@ -25,7 +25,7 @@ app.use(
 
 // Health check
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 export default app;
