@@ -7,12 +7,7 @@
   "env": {
     "NODE_ENV": "production"
   },
-  "functions": {
-    "api/trpc/**": {
-      "memory": 1024,
-      "maxDuration": 60
-    }
-  },
+
   "rewrites": [
     {
       "source": "/api/(.*)",
