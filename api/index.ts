@@ -1,114 +1,133 @@
 import "dotenv/config";
 import express from "express";
-import { initTRPC, TRPCError } from "@trpc/server";
+import { initTRPC } from "@trpc/server";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import superjson from "superjson";
 import { z } from "zod";
-import { generateVideoFromText, generateVideoFromImage, checkVideoStatus } from "../server/replicate-client.ts";
 
-// Initialize tRPC with a simple context
-const t = initTRPC.create({
-  transformer: superjson,
-});
+// --- Replicate Client Logic (Inlined to avoid module resolution issues on Vercel) ---
+const REPLICATE_API_BASE = "https://api.replicate.com/v1";
+const DEFAULT_MODEL = "minimax/video-01";
 
-const router = t.router;
-const publicProcedure = t.procedure;
+async function generateVideoFromText(request: {
+  prompt: string;
+  firstFrameImage?: string;
+  model?: string;
+}) {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) throw new Error("REPLICATE_API_TOKEN is not configured");
 
-// Simple in-memory rate limiting
-const requestCounts = new Map<string, { count: number; resetTime: number }>();
-function checkRateLimit(identifier: string, maxRequests: number = 5, windowMs: number = 3600000): boolean {
-  const now = Date.now();
-  const record = requestCounts.get(identifier);
-  if (!record || now > record.resetTime) {
-    requestCounts.set(identifier, { count: 1, resetTime: now + windowMs });
-    return true;
+  const model = request.model || DEFAULT_MODEL;
+  const input: Record<string, unknown> = { prompt: request.prompt };
+  if (request.firstFrameImage) input.first_frame_image = request.firstFrameImage;
+
+  const response = await fetch(`${REPLICATE_API_BASE}/predictions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ version: model, input }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Replicate API error: ${error.detail || response.statusText}`);
   }
-  if (record.count >= maxRequests) return false;
-  record.count++;
-  return true;
+
+  const prediction = await response.json();
+  let status: "pending" | "processing" | "done" | "failed" = "pending";
+  if (prediction.status === "succeeded") status = "done";
+  else if (prediction.status === "failed") status = "failed";
+  else if (["processing", "starting"].includes(prediction.status)) status = "processing";
+
+  return {
+    requestId: prediction.id,
+    status,
+    videoUrl: prediction.output?.[0] || prediction.output,
+    errorMessage: prediction.error,
+  };
 }
 
-// Define a minimal appRouter for Vercel
-const appRouter = router({
-  videos: router({
-    generateFromText: publicProcedure
-      .input(z.object({
-        prompt: z.string().min(1).max(2000),
-        duration: z.number().min(1).max(15).default(10),
-        aspectRatio: z.enum(["16:9", "1:1", "9:16"]).default("16:9"),
-        resolution: z.enum(["720p", "480p"]).default("720p"),
-        model: z.enum(["minimax/video-01", "bytedance/seedance-1-lite", "kling-v2.5-turbo-pro"]).default("minimax/video-01"),
-      }))
-      .mutation(async ({ ctx, input }) => {
-        const result = await generateVideoFromText({
-          prompt: input.prompt,
-          model: input.model as any,
-        });
-        return {
-          requestId: result.requestId,
-          status: result.status,
-          videoUrl: result.videoUrl,
-          errorMessage: result.errorMessage,
-          type: "text-to-video",
-          prompt: input.prompt,
-          duration: input.duration,
-          aspectRatio: input.aspectRatio,
-          resolution: input.resolution,
-          model: input.model,
-          createdAt: new Date(),
-        };
-      }),
+async function checkVideoStatus(requestId: string) {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) throw new Error("REPLICATE_API_TOKEN is not configured");
 
-    generateFromImage: publicProcedure
+  const response = await fetch(`${REPLICATE_API_BASE}/predictions/${requestId}`, {
+    headers: {
+      Authorization: `Token ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) throw new Error(`Failed to check status: ${response.statusText}`);
+
+  const prediction = await response.json();
+  let status: "pending" | "processing" | "done" | "failed" = "pending";
+  if (prediction.status === "succeeded") status = "done";
+  else if (prediction.status === "failed") status = "failed";
+  else if (["processing", "starting"].includes(prediction.status)) status = "processing";
+
+  return {
+    requestId: prediction.id,
+    status,
+    videoUrl: prediction.output?.[0] || prediction.output,
+    errorMessage: prediction.error,
+  };
+}
+
+// --- tRPC Setup ---
+const t = initTRPC.create({ transformer: superjson });
+const appRouter = t.router({
+  videos: t.router({
+    generateFromText: t.procedure
       .input(z.object({
-        imageUrl: z.string().url(),
-        prompt: z.string().min(1).max(2000),
-        duration: z.number().min(1).max(15).default(10),
-        aspectRatio: z.enum(["16:9", "1:1", "9:16"]).default("16:9"),
-        resolution: z.enum(["720p", "480p"]).default("720p"),
-        model: z.enum(["minimax/video-01", "bytedance/seedance-1-lite", "kling-v2.5-turbo-pro"]).default("minimax/video-01"),
+        prompt: z.string().min(1),
+        duration: z.number().optional(),
+        aspectRatio: z.string().optional(),
+        resolution: z.string().optional(),
+        model: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
-        const result = await generateVideoFromImage(input.imageUrl, input.prompt, input.model);
-        return {
-          requestId: result.requestId,
-          status: result.status,
-          videoUrl: result.videoUrl,
-          errorMessage: result.errorMessage,
-          type: "image-to-video",
+        const result = await generateVideoFromText({
           prompt: input.prompt,
-          imageUrl: input.imageUrl,
-          duration: input.duration,
-          aspectRatio: input.aspectRatio,
-          resolution: input.resolution,
           model: input.model,
-          createdAt: new Date(),
-        };
+        });
+        return { ...result, ...input, createdAt: new Date() };
       }),
 
-    checkStatus: publicProcedure
+    generateFromImage: t.procedure
+      .input(z.object({
+        imageUrl: z.string().url(),
+        prompt: z.string().min(1),
+        duration: z.number().optional(),
+        aspectRatio: z.string().optional(),
+        resolution: z.string().optional(),
+        model: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const result = await generateVideoFromText({
+          prompt: input.prompt,
+          firstFrameImage: input.imageUrl,
+          model: input.model,
+        });
+        return { ...result, ...input, createdAt: new Date() };
+      }),
+
+    checkStatus: t.procedure
       .input(z.object({ requestId: z.string() }))
       .query(async ({ input }) => {
         return await checkVideoStatus(input.requestId);
       }),
     
-    list: publicProcedure.query(() => []),
+    list: t.procedure.query(() => []),
   }),
 });
 
+// --- Express App ---
 const app = express();
 app.use(express.json());
-
-app.use(
-  "/api/trpc",
-  createExpressMiddleware({
-    router: appRouter,
-    createContext: () => ({}),
-  })
-);
-
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", message: "Minimal API is running" });
-});
+app.use("/api/trpc", createExpressMiddleware({ router: appRouter, createContext: () => ({}) }));
+app.get("/api/health", (req, res) => res.json({ status: "ok", message: "Self-contained API is running" }));
 
 export default app;
