@@ -6,7 +6,7 @@ import superjson from "superjson";
 import { z } from "zod";
 import { put } from "@vercel/blob";
 
-// --- Replicate Client Logic (Inlined to avoid module resolution issues on Vercel) ---
+// --- Replicate Client Logic ---
 const REPLICATE_API_BASE = "https://api.replicate.com/v1";
 const DEFAULT_MODEL = "minimax/video-01";
 
@@ -19,15 +19,16 @@ async function downloadVideoToBuffer(url: string): Promise<Buffer> {
 
 async function uploadVideoToBlob(videoUrl: string, filename: string): Promise<string> {
   try {
+    console.log(`Uploading video to Vercel Blob: ${filename}`);
     const videoBuffer = await downloadVideoToBuffer(videoUrl);
     const blobResponse = await put(filename, videoBuffer, {
       access: "public",
       contentType: "video/mp4",
     });
+    console.log(`Upload successful: ${blobResponse.url}`);
     return blobResponse.url;
   } catch (error) {
     console.error("Failed to upload to Vercel Blob:", error);
-    // Return original URL if upload fails
     return videoUrl;
   }
 }
@@ -44,6 +45,7 @@ async function generateVideoFromText(request: {
   const input: Record<string, unknown> = { prompt: request.prompt };
   if (request.firstFrameImage) input.first_frame_image = request.firstFrameImage;
 
+  console.log(`Starting video generation with model: ${model}`);
   const response = await fetch(`${REPLICATE_API_BASE}/predictions`, {
     method: "POST",
     headers: {
@@ -55,10 +57,13 @@ async function generateVideoFromText(request: {
 
   if (!response.ok) {
     const error = await response.json();
+    console.error("Replicate API error:", error);
     throw new Error(`Replicate API error: ${error.detail || response.statusText}`);
   }
 
   const prediction = await response.json();
+  console.log(`Prediction created: ${prediction.id}, status: ${prediction.status}`);
+
   let status: "pending" | "processing" | "done" | "failed" = "pending";
   if (prediction.status === "succeeded") status = "done";
   else if (prediction.status === "failed") status = "failed";
@@ -66,7 +71,6 @@ async function generateVideoFromText(request: {
 
   let videoUrl = prediction.output?.[0] || prediction.output;
   
-  // Upload to Vercel Blob if video is ready
   if (status === "done" && videoUrl) {
     const filename = `videos/${prediction.id}-${Date.now()}.mp4`;
     videoUrl = await uploadVideoToBlob(videoUrl, filename);
@@ -84,6 +88,7 @@ async function checkVideoStatus(requestId: string) {
   const token = process.env.REPLICATE_API_TOKEN;
   if (!token) throw new Error("REPLICATE_API_TOKEN is not configured");
 
+  console.log(`Checking status for requestId: ${requestId}`);
   const response = await fetch(`${REPLICATE_API_BASE}/predictions/${requestId}`, {
     headers: {
       Authorization: `Token ${token}`,
@@ -94,6 +99,8 @@ async function checkVideoStatus(requestId: string) {
   if (!response.ok) throw new Error(`Failed to check status: ${response.statusText}`);
 
   const prediction = await response.json();
+  console.log(`Status for ${requestId}: ${prediction.status}`);
+
   let status: "pending" | "processing" | "done" | "failed" = "pending";
   if (prediction.status === "succeeded") status = "done";
   else if (prediction.status === "failed") status = "failed";
@@ -101,7 +108,6 @@ async function checkVideoStatus(requestId: string) {
 
   let videoUrl = prediction.output?.[0] || prediction.output;
   
-  // Upload to Vercel Blob if video is ready
   if (status === "done" && videoUrl) {
     const filename = `videos/${prediction.id}-${Date.now()}.mp4`;
     videoUrl = await uploadVideoToBlob(videoUrl, filename);
@@ -128,6 +134,7 @@ const appRouter = t.router({
         model: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
+        console.log("TRPC: generateFromText called", input.prompt);
         const result = await generateVideoFromText({
           prompt: input.prompt,
           model: input.model,
@@ -145,6 +152,7 @@ const appRouter = t.router({
         model: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
+        console.log("TRPC: generateFromImage called", input.prompt);
         const result = await generateVideoFromText({
           prompt: input.prompt,
           firstFrameImage: input.imageUrl,
