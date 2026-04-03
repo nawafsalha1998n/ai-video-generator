@@ -1,20 +1,17 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/index.ts",
-      "use": "@vercel/node"
-    },
-    {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": { "distDir": "dist/public" }
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist/public",
+  "framework": "vite",
+  "functions": {
+    "api/index.ts": {
+      "runtime": "vercel-node@latest"
     }
-  ],
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "api/index.ts"
+      "destination": "/api/index.ts"
     },
     {
       "source": "/(.*)",
