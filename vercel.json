@@ -1,13 +1,9 @@
 {
   "version": 2,
-  "buildCommand": "pnpm build",
-  "devCommand": "pnpm dev",
-  "installCommand": "pnpm install",
   "framework": "vite",
   "env": {
     "NODE_ENV": "production"
   },
-
   "rewrites": [
     {
       "source": "/api/(.*)",
