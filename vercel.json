@@ -1,15 +1,15 @@
 {
   "version": 2,
-  "public": true,
-  "cleanUrls": true,
+  "builds": [
+    {
+      "src": "server/_core/index.ts",
+      "use": "@vercel/node"
+    }
+  ],
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
-    },
-    {
       "source": "/(.*)",
-      "destination": "/index.html"
+      "destination": "server/_core/index.ts"
     }
   ]
 }
